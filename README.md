@@ -1,0 +1,1 @@
+Predicting stock market trends using the historic performace of the stock and the current market sentiment.
