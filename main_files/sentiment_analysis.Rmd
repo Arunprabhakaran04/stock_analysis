@@ -1,0 +1,336 @@
+---
+title: "sentiment_analysis"
+author: "Arun 22BCE2572"
+date: "2025-04-05"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+if (!require("tidyverse")) install.packages("tidyverse")
+if (!require("syuzhet")) install.packages("syuzhet")
+if (!require("lubridate")) install.packages("lubridate")
+```
+
+```{r}
+library(tidyverse)
+library(syuzhet)  # For sentiment analysis
+library(lubridate)
+```
+
+```{r}
+compound_scores <- function(df) {
+  # Initialize an empty vector to store compound scores
+  result <- numeric(nrow(df))
+  
+  # Loop through each row in the dataframe with a progress bar
+  for (i in 1:nrow(df)) {
+    text <- df$title[i]
+    
+    # Get sentiment scores using syuzhet
+    sentiment <- get_sentiment(text, method = "syuzhet")
+    
+    # Store the compound score
+    # Note: syuzhet doesn't have a direct equivalent to VADER's compound score
+    # so we're using the basic sentiment score provided by syuzhet
+    result[i] <- sentiment
+  }
+  
+  # Add the compound scores to the dataframe
+  df$compound <- result
+  
+  # Remove the title column
+  df$title <- NULL
+  
+  # Group by date and calculate mean compound score
+  df_summary <- df %>%
+    group_by(date) %>%
+    summarize(compound = mean(compound, na.rm = TRUE))
+  
+  return(df_summary)
+}
+
+```
+
+```{r}
+df <- read.csv("D:\\R\\stock_sentiment_analysis\\main_files\\HSB_sentiment.csv", stringsAsFactors = FALSE)
+```
+
+```{r}
+df$date <- as.Date(df$date)
+```
+
+```{r}
+df_result <- compound_scores(df)
+
+# View the result
+print(df_result)
+```
+
+```{r}
+ggplot(df_result, aes(x = date, y = compound)) +
+  geom_line() +
+  geom_point() +
+  theme_minimal() +
+  labs(title = "Sentiment Analysis of Stock News",
+       x = "Date",
+       y = "Compound Sentiment Score",
+       caption = "Source: HSB_sentiment.csv") +
+  scale_x_date(date_breaks = "1 month", date_labels = "%b %Y")
+```
+
+```{r}
+df_historic = read.csv("D:\\R\\stock_sentiment_analysis\\stock_data_preprocessed_HDFCBANK.NS.csv")
+print(head(df_historic))
+```
+
+```{r}
+df_result$date <- as.Date(df_result$date)
+df_historic$Date <- as.Date(df_historic$Date)
+```
+
+```{r}
+data <- merge(df_historic, df_result, by.x = "Date", by.y = "date", all.x = TRUE)
+
+```
+
+```{r}
+write.csv(data, "D:\\R\\stock_sentiment_analysis\\Merged_data_HSB.csv")
+```
+
+```{r}
+data$compound[is.na(data$compound)] <- 0
+
+```
+
+```{r}
+head(data)
+```
+
+```{r}
+print(str(data))
+```
+
+```{r}
+zero_count <- sum(data$compound == 0)
+print(zero_count)
+```
+
+```{r}
+data$Date <- as.Date(data$Date) 
+dates <- data$Date
+print(head(data))
+```
+
+```{r}
+print(str(data))
+```
+
+```{r}
+if (!require("xgboost")) install.packages("xgboost")
+if (!require("caret")) install.packages("caret")
+if (!require("Metrics")) install.packages("Metrics")
+if (!require("ggplot2")) install.packages("ggplot2")
+```
+
+```{r}
+library(xgboost)
+library(caret)
+library(Metrics)
+library(ggplot2)
+```
+
+```{r}
+y <- data$Close
+X <- data[, !colnames(data) %in% c("Close", "Date")] 
+```
+
+```{r}
+n <- nrow(data)
+test_size <- 50
+
+# Create train and test sets
+X_train <- X[1:(n-test_size), ]
+y_train <- y[1:(n-test_size)]
+X_test <- X[(n-test_size+1):n, ]
+y_test <- y[(n-test_size+1):n]
+
+```
+
+```{r}
+dtrain <- xgb.DMatrix(data = as.matrix(X_train), label = y_train)
+dtest <- xgb.DMatrix(data = as.matrix(X_test), label = y_test)
+```
+
+```{r}
+params <- list(
+  objective = "reg:squarederror",
+  eval_metric = "rmse"
+)
+```
+
+```{r}
+epochs <- 100
+model <- xgb.train(
+  params = params,
+  data = dtrain,
+  nrounds = epochs
+)
+```
+
+```{r}
+y_pred <- predict(model, dtest)
+print(y_pred)
+```
+
+```{r}
+rmse_value <- rmse(y_test, y_pred)
+print(paste("Root Mean Squared Error:", round(rmse_value, 4)))
+```
+
+```{r}
+plot_data <- data.frame(
+  Date = tail(dates, test_size),  
+  Actual = y_test,
+  Predicted = y_pred
+)
+
+```
+
+```{r}
+plot_data_long <- tidyr::pivot_longer(
+  plot_data,
+  cols = c("Actual", "Predicted"),
+  names_to = "Type",
+  values_to = "Price"
+)
+```
+
+```{r}
+ggplot(plot_data_long, aes(x = as.Date(Date), y = Price, color = Type, group = Type)) +
+  geom_line() +
+  scale_color_manual(values = c("Actual" = "blue", "Predicted" = "red")) +
+  labs(
+    title = "Predicted vs. Actual Stock Prices",
+    x = "Date",
+    y = "Close Price"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+```
+
+```{r}
+#Feature Importance -
+importance <- xgb.importance(feature_names = colnames(X_train), model = model)
+xgb.plot.importance(importance, top_n = 10)
+```
+
+```{r}
+#Light BGM training - 
+#install.packages("lightgbm") # Skip this if already installed
+library(lightgbm)
+library(Metrics)  # for rmse
+
+```
+
+```{r}
+# Assuming 'X' contains your features and 'y' is your target ('tomorrow')
+n <- nrow(data)
+test_size <- 50
+
+X_train <- as.matrix(X[1:(n - test_size), ])
+y_train <- y[1:(n - test_size)]
+X_test <- as.matrix(X[(n - test_size + 1):n, ])
+y_test <- y[(n - test_size + 1):n]
+
+dtrain <- lgb.Dataset(data = X_train, label = y_train)
+
+```
+
+```{r}
+params <- list(
+  objective = "regression",
+  metric = "rmse",
+  learning_rate = 0.05,
+  num_leaves = 31,
+  verbosity = -1
+)
+
+model <- lgb.train(
+  params = params,
+  data = dtrain,
+  nrounds = 100
+)
+```
+
+```{r}
+y_pred <- predict(model, X_test)
+print(y_pred)
+
+rmse_val <- rmse(y_test, y_pred)
+print(paste("LightGBM RMSE:", round(rmse_val, 4)))
+```
+#Neural network
+```{r}
+#install.packages("keras")
+library(keras)
+
+```
+```{r}
+install_keras()
+```
+
+```{r}
+# Normalize data
+X_scaled <- scale(as.matrix(X))
+
+n <- nrow(X_scaled)
+test_size <- 50
+
+X_train <- X_scaled[1:(n - test_size), ]
+y_train <- y[1:(n - test_size)]
+X_test <- X_scaled[(n - test_size + 1):n, ]
+y_test <- y[(n - test_size + 1):n]
+
+```
+
+```{r}
+install_tensorflow()
+```
+
+```{r}
+model <- keras_model_sequential() %>%
+  layer_dense(units = 64, activation = "relu", input_shape = ncol(X_train)) %>%
+  layer_dense(units = 32, activation = "relu") %>%
+  layer_dense(units = 1)
+
+model %>% compile(
+  loss = "mse",
+  optimizer = optimizer_adam(),
+  metrics = list("mean_squared_error")
+)
+
+history <- model %>% fit(
+  X_train, y_train,
+  epochs = 100,
+  batch_size = 16,
+  validation_split = 0.1,
+  verbose = 0
+)
+
+```
+
+```{r}
+
+```
+
+```{r}
+
+```
+
+```{r}
+
+```
