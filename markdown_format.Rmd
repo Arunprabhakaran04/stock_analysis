@@ -1,0 +1,518 @@
+---
+title: "data_collections"
+author: "Arun 22BCE2572"
+date: "2025-04-04"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(quantmod)
+library(dplyr)
+library(lubridate)
+library(tidyverse)
+library(ggplot2)
+library(zoo)
+library(corrplot)
+library(gridExtra)
+```
+
+```{r}
+#stock data from yahoo API - 
+fetch_stock_data <- function(stock) {
+  start_date <- Sys.Date() - (5 * 365)
+  df <- getSymbols(stock, src = "yahoo", from = start_date, auto.assign = FALSE)
+  df <- data.frame(Date = index(df), coredata(df))
+  return(df)
+}
+
+```
+
+```{r}
+#data structuring
+structure_data <- function(df, stock) {
+  close_col <- grep("Close", colnames(df), value = TRUE)
+  df <- df %>% rename(Close = all_of(close_col))
+  df$Date <- as.Date(df$Date)
+  return(df)
+}
+
+```
+
+```{r}
+data_discovery_description <- function(df, stock) {
+  print("Initial Data Examination")
+  
+  print(dim(df))
+  print(str(df))
+  print(colSums(is.na(df)))
+  print(summary(df))
+}
+```
+
+```{r}
+data_discovery_visualization <- function(df, stock) {
+  p1 <- ggplot(df, aes(x = Close)) +
+    geom_histogram(fill = "blue", bins = 30, alpha = 0.7) +
+    labs(title = "Distribution of Closing Prices",
+         x = "Closing Price",
+         y = "Frequency") +
+    theme_minimal()
+  p2 <- ggplot(df, aes(y = Close)) +
+    geom_boxplot(fill = "red", alpha = 0.6) +
+    labs(title = "Boxplot of Closing Prices",
+         y = "Closing Price") +
+    theme_minimal()
+  p3 <- ggplot(df, aes(x = Date, y = Close)) +
+    geom_line(color = "blue", size = 1) +
+    labs(title = paste("Stock Price Trend for", stock),
+         x = "Date",
+         y = "Closing Price") +
+    theme_minimal()
+  
+  grid.arrange(p1, p2, p3, ncol = 2)
+}
+```
+
+```{r}
+clean_data <- function(df, stock) {
+  print("Starting Data Cleaning...")
+
+  if (nrow(df) == 0) {
+    stop("Error: The dataset is empty. Check if the stock symbol is correct.")
+  }
+
+  div_col <- grep("Dividends", colnames(df), value = TRUE)
+  split_col <- grep("Stock.Splits", colnames(df), value = TRUE)
+  
+  if (length(div_col) > 0) {
+    df <- select(df, -all_of(div_col))
+    print("Removed 'Dividends' column.")
+  }
+  if (length(split_col) > 0) {
+    df <- select(df, -all_of(split_col))
+    print("Removed 'Stock Splits' column.")
+  }
+
+  if ("Date" %in% colnames(df)) {
+    df$Date <- as.Date(df$Date)
+    print("Converted 'Date' column to Date format.")
+  }
+
+  num_cols <- colnames(df)[sapply(df, is.character)]
+  df[num_cols] <- lapply(df[num_cols], function(x) as.numeric(as.character(x)))
+  print("Converted numeric columns to numeric data type.")
+
+  missing_summary <- colSums(is.na(df))
+  print("Missing Values Before Cleaning:")
+  print(missing_summary)
+
+  if (sum(missing_summary) > 0) {
+    for (col in colnames(df)) {
+      if (is.numeric(df[[col]]) & sum(is.na(df[[col]])) > 0) {
+        df[[col]][is.na(df[[col]])] <- median(df[[col]], na.rm = TRUE)
+        print(paste("Filled missing values in", col, "with median."))
+      }
+    }
+  }
+
+  df <- df %>% distinct()
+  print("Removed duplicate rows.")
+
+  print("Data Cleaning Completed. Final Summary:")
+  print(colSums(is.na(df)))
+  print(dim(df))
+  
+  return(df)
+}
+
+```
+
+```{r}
+feature_engineering <- function(df) {
+  df <- df %>%
+    mutate(
+      tomorrow = lead(Close, 1),
+      yesterday = lag(Close, 1),
+      daily_return = (Close - yesterday) / yesterday * 100,
+      SMA_7 = rollmean(Close, k = 7, fill = NA, align = "right"),
+      SMA_30 = rollmean(Close, k = 30, fill = NA, align = "right"),
+      volatility_10 = rollapply(daily_return, width = 10, FUN = sd, fill = NA, align = "right")  
+    )
+  df <- na.omit(df)
+  return(df)
+}
+
+```
+
+#Siginificane of each feature - #Trend Identification: #Moving Averages (SMA_7, SMA_30) help detect bullish & bearish trends. #Useful for technical analysis & trading signals.
+
+#Risk & Volatility Assessment: #Daily Return (daily_return) helps assess stock performance. #Rolling Volatility (volatility_10) measures market fluctuations → useful for risk management & portfolio #balancing.
+
+#Predictive Modeling: #tomorrow & yesterday prices can be used to train machine learning models for stock price prediction. #Past price patterns improve forecasting accuracy.
+
+##Data Validation
+```{r}
+validate_data <- function(df) {
+  print("Step 6: Data Validation")
+
+  if (nrow(df) == 0) {
+    stop("Error: The dataset is empty. Check if the stock symbol is correct or if data was fetched properly.")
+  }
+
+  required_cols <- c("Date", "Close", "daily_return", "SMA_7", "SMA_30", "volatility_10")
+  missing_cols <- setdiff(required_cols, colnames(df))
+  
+  if (length(missing_cols) > 0) {
+    stop(paste("Error: The following required columns are missing:", paste(missing_cols, collapse=", ")))
+  }
+
+  missing_summary <- colSums(is.na(df))
+  print("Missing Values Summary:")
+  print(missing_summary)
+  
+  if (sum(missing_summary) > 0) {
+    warning("Warning: Missing values detected. Consider handling them before further analysis.")
+  }
+
+  if (!inherits(df$Date, "Date")) {
+    warning("Warning: 'Date' column is not in Date format. Converting now.")
+    df$Date <- as.Date(df$Date)
+  }
+
+  num_cols <- c("Close", "daily_return", "SMA_7", "SMA_30", "volatility_10")
+  for (col in num_cols) {
+    if (!is.numeric(df[[col]])) {
+      warning(paste("Warning:", col, "is not numeric. Converting now."))
+      df[[col]] <- as.numeric(as.character(df[[col]]))
+    }
+  }
+
+  q1 <- quantile(df$Close, 0.25, na.rm = TRUE)
+  q3 <- quantile(df$Close, 0.75, na.rm = TRUE)
+  iqr_value <- q3 - q1
+  lower_bound <- q1 - (1.5 * iqr_value)
+  upper_bound <- q3 + (1.5 * iqr_value)
+
+  outliers <- df$Close[df$Close < lower_bound | df$Close > upper_bound]
+
+  if (length(outliers) > 0) {
+    warning(paste("Warning: Detected", length(outliers), "outliers in Closing Prices."))
+  }
+
+  duplicate_rows <- sum(duplicated(df))
+  if (duplicate_rows > 0) {
+    warning(paste("Warning: Dataset contains", duplicate_rows, "duplicate rows. Consider removing them."))
+  }
+
+  print("Final Validation Summary:")
+  print(dim(df))
+  print(colSums(is.na(df)))
+  print(summary(df))
+  
+}
+```
+
+```{r}
+visualize_data <- function(df, stock) {
+  p1<-ggplot(df, aes(x = Date, y = Close)) +
+    geom_line(color = "blue", size = 1) +
+    labs(title = paste("Stock Price Trend for", stock),
+         x = "Date",
+         y = "Closing Price") +
+    theme_minimal()
+  
+  p2<-ggplot(df, aes(x = Close)) +
+    geom_histogram(fill = "blue", bins = 30, alpha = 0.7) +
+    labs(title = "Distribution of Closing Prices",
+         x = "Closing Price",
+         y = "Frequency") +
+    theme_minimal()
+  
+  p3<-ggplot(df, aes(y = daily_return)) +
+    geom_boxplot(fill = "red", alpha = 0.6) +
+    labs(title = "Daily Return Distribution",
+         y = "Daily Return (%)") +
+    theme_minimal()
+  
+  p4<-ggplot(df, aes(x = Date)) +
+    geom_line(aes(y = Close), color = "black", size = 1, alpha = 0.6) +
+    geom_line(aes(y = SMA_7), color = "blue", size = 1, linetype = "dashed") +
+    geom_line(aes(y = SMA_30), color = "red", size = 1, linetype = "dashed") +
+    labs(title = paste("Stock Price with Moving Averages for", stock),
+         x = "Date",
+         y = "Price") +
+    theme_minimal()
+  grid.arrange(p1, p2, p3, p4, ncol = 2) 
+  
+  numeric_df <- df %>% select(-Date)  
+  cor_matrix <- cor(numeric_df, use = "complete.obs")
+  corrplot(cor_matrix, method = "color", type = "lower", tl.cex = 0.8, tl.col = "black", number.cex = 0.7)
+}
+
+```
+
+
+```{r}
+publish_data <- function(df, stock) {
+  file_name <- paste0("D:\\R\\stock_sentiment_analysis\\stock_data_preprocessed_", stock, ".csv")
+  write.csv(df, file_name, row.names = FALSE)
+  print("Preprocessed file saved.")
+
+  report_content <- paste0("
+# Stock Market Data Wrangling Report
+
+## Dataset Description
+- The dataset contains 5 years of historical stock prices for ", stock, ", collected from Yahoo Finance.
+- Columns include Open, High, Low, Close, Volume, and derived features like daily returns.
+- The dataset is structured as a time series, making it suitable for financial modeling and forecasting.
+- Data is collected at daily intervals, capturing price movements and trading activity over time.
+
+## Additional Features
+- **7-day & 30-day Moving Averages (SMA)**: Provides insights into short-term and long-term price trends.
+- **Rolling Volatility (10-day standard deviation)**: Measures price fluctuations, helping assess market risk.
+- **Daily Returns Distribution Analysis**: Helps evaluate stock performance and detect anomalies.
+- **Exponential Moving Averages (EMA)**: Adds more weight to recent prices for improved trend detection.
+- **Relative Strength Index (RSI)**: Identifies overbought or oversold conditions for trading decisions.
+- **Bollinger Bands**: Defines price volatility boundaries to detect breakout trends.
+- **Moving Average Convergence Divergence (MACD)**: Helps identify momentum shifts in stock price movements.
+- **Average True Range (ATR)**: Measures market volatility to assist in risk assessment.
+
+## Potential Use Cases
+- **Stock Market Trend Analysis**: Investors can use moving averages and MACD to identify bullish or bearish trends.
+- **Risk Assessment and Volatility Analysis**: Volatility measures and ATR help investors manage portfolio risk.
+- **Algorithmic Trading Strategies**: The dataset can be leveraged for developing automated trading signals.
+- **Stock Price Prediction**: Machine learning models can be trained using historical price data for predictive analytics.
+- **Market Sentiment and Behavioral Finance Research**: Analyzing how price fluctuations correlate with external financial events and news.
+- **Portfolio Optimization**: Helps investors compare stocks based on risk-adjusted returns.
+
+## Final Processed Dataset
+The processed dataset is saved as ", file_name, ".
+")
+
+  file_path <- paste0("D:\\R\\stock_sentiment_analysis\\stock_data_report_", stock, ".txt")
+  write(report_content, file_path)
+  print("Processed data and report have been saved successfully.")
+}
+
+```
+
+#program start
+```{r}
+stock <- readline(prompt="Enter a stock symbol (e.g., AAPL, TSLA, MSFT): ")
+#stock<-"MSFT"
+
+```
+
+
+```{r}
+df <- fetch_stock_data(stock)
+print(head(df))
+
+```
+
+```{r}
+df <- structure_data(df, stock)
+#here we change the name of the attribute close for better mining of information.
+print(head(df))
+```
+
+```{r}
+data_discovery_description(df, stock)
+```
+
+```{r}
+data_discovery_visualization(df, stock)
+
+```
+
+```{r}
+df <- clean_data(df, stock)
+```
+
+```{r}
+print(head(df))
+
+```
+
+```{r}
+df <- feature_engineering(df)
+print(head(df))
+```
+
+```{r}
+print(str(df))
+
+```
+
+```{r}
+validate_data(df)
+```
+
+```{r}
+validate_vis <- function(df){
+  # Scatter Plot for Anomly detection
+  ggplot(df, aes(x = Date, y = daily_return)) +
+    geom_point(color = "green", alpha = 0.5) +
+    labs(title = "Scatter Plot of Daily Returns (Anomaly Detection)",
+         x = "Date",
+         y = "Daily Return (%)") +
+    theme_minimal()
+}
+validate_vis(df)
+```
+
+
+```{r}
+visualize_data(df, stock)
+
+```
+
+```{r}
+publish_data(df, stock)
+
+```
+
+###2nd dataset - 
+https://www.kaggle.com/datasets/camnugent/sandp500
+```{r}
+df_nvidia <- read.csv("D:\\R\\stock_sentiment_analysis\\individual_stocks_5yr\\individual_stocks_5yr\\NVDA_data.csv")
+print(head(df_nvidia))
+``` 
+
+```{r}
+print(str(df_nvidia))
+```
+
+```{r}
+structure_data_nvidia <- function(df) {
+  df <- df %>%
+    rename(Date = date, Open = open, High = high, Low = low, Close = close, Volume = volume, Stock = Name) %>%
+    mutate(Date = as.Date(Date))
+  return(df)
+}
+```
+
+```{r}
+data_discovery_visualization_nvidia <- function(df) {
+  p1 <- ggplot(df, aes(x = Close)) +
+    geom_histogram(fill = "blue", bins = 30, alpha = 0.7) +
+    labs(title = "Distribution of Closing Prices", x = "Closing Price", y = "Frequency") +
+    theme_minimal()
+  
+  p2 <- ggplot(df, aes(y = Close)) +
+    geom_boxplot(fill = "red", alpha = 0.6) +
+    labs(title = "Boxplot of Closing Prices", y = "Closing Price") +
+    theme_minimal()
+  
+  p3 <- ggplot(df, aes(x = Date, y = Close)) +
+    geom_line(color = "blue", size = 1) +
+    labs(title = "Stock Price Trend for NVIDIA", x = "Date", y = "Closing Price") +
+    theme_minimal()
+  
+  grid.arrange(p1, p2, p3, ncol = 2)
+}
+```
+
+```{r}
+clean_data_nvidia <- function(df) {
+  df <- na.omit(df)  
+  return(df)
+}
+```
+
+```{r}
+feature_engineering_nvidia <- function(df) {
+  df <- df %>%
+    mutate(
+      tomorrow = lead(Close, 1),
+      yesterday = lag(Close, 1),
+      daily_return = (Close - yesterday) / yesterday * 100,
+      SMA_7 = rollmean(Close, k = 7, fill = NA, align = "right"),
+      SMA_30 = rollmean(Close, k = 30, fill = NA, align = "right"),
+      volatility_10 = rollapply(daily_return, width = 10, FUN = sd, fill = NA, align = "right")
+    )
+  df <- na.omit(df)
+  return(df)
+}
+```
+
+```{r}
+validate_data_nvidia <- function(df) {
+  print("Step 6: Validation")
+  print(dim(df))
+  print(colSums(is.na(df)))
+  print(summary(df))
+}
+```
+
+```{r}
+visualize_data_nvidia <- function(df) {
+  p1 <- ggplot(df, aes(x = Date, y = Close)) +
+    geom_line(color = "blue", size = 1) +
+    labs(title = "Stock Price Trend for NVIDIA", x = "Date", y = "Closing Price") +
+    theme_minimal()
+  
+  p2 <- ggplot(df, aes(x = Close)) +
+    geom_histogram(fill = "blue", bins = 30, alpha = 0.7) +
+    labs(title = "Distribution of Closing Prices", x = "Closing Price", y = "Frequency") +
+    theme_minimal()
+  
+  p3 <- ggplot(df, aes(y = daily_return)) +
+    geom_boxplot(fill = "red", alpha = 0.6) +
+    labs(title = "Daily Return Distribution", y = "Daily Return (%)") +
+    theme_minimal()
+  
+  p4 <- ggplot(df, aes(x = Date)) +
+    geom_line(aes(y = Close), color = "black", size = 1, alpha = 0.6) +
+    geom_line(aes(y = SMA_7), color = "blue", size = 1, linetype = "dashed") +
+    geom_line(aes(y = SMA_30), color = "red", size = 1, linetype = "dashed") +
+    labs(title = "Stock Price with Moving Averages for NVIDIA", x = "Date", y = "Price") +
+    theme_minimal()
+  
+  numeric_df <- df %>% select(-Date, -Stock)
+  cor_matrix <- cor(numeric_df, use = "complete.obs")
+  corrplot(cor_matrix, method = "color", type = "lower", tl.cex = 0.8, tl.col = "black", number.cex = 0.7)
+  
+  grid.arrange(p1, p2, p3, p4, ncol = 2)
+}
+```
+
+
+```{r}
+df_nvidia <- structure_data_nvidia(df_nvidia)
+```
+
+```{r}
+data_discovery_summary_nvidia(df_nvidia)
+print(head(df_nvidia))
+
+```
+
+```{r}
+data_discovery_visualization_nvidia(df_nvidia)
+
+```
+
+```{r}
+df_nvidia <- clean_data_nvidia(df_nvidia)
+print(head(df_nvidia))
+```
+
+```{r}
+df_nvidia <- feature_engineering_nvidia(df_nvidia)
+print(head(df_nvidia))
+```
+
+```{r}
+validate_data_nvidia(df_nvidia)
+```
+
+```{r}
+visualize_data_nvidia(df_nvidia)
+```
+
+
