@@ -1,12 +1,9 @@
 library(reticulate)
-# 
-# # Create a virtual environment named "r-reticulate"
+ 
 virtualenv_create("r-reticulate")
-#
-# # Use this environment for Python in R
+
 use_virtualenv("r-reticulate", required = TRUE)
-#
-# # Now install packages inside this environment
+
 py_install(c("selenium", "beautifulsoup4", "pandas", "webdriver-manager"), pip = TRUE)
 
 py_code <- "
