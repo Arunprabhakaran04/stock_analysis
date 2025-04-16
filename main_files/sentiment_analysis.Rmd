@@ -17,35 +17,23 @@ if (!require("lubridate")) install.packages("lubridate")
 
 ```{r}
 library(tidyverse)
-library(syuzhet)  # For sentiment analysis
+library(syuzhet)  
 library(lubridate)
 ```
 
 ```{r}
 compound_scores <- function(df) {
-  # Initialize an empty vector to store compound scores
   result <- numeric(nrow(df))
-  
-  # Loop through each row in the dataframe with a progress bar
-  for (i in 1:nrow(df)) {
+    for (i in 1:nrow(df)) {
     text <- df$title[i]
     
-    # Get sentiment scores using syuzhet
     sentiment <- get_sentiment(text, method = "syuzhet")
-    
-    # Store the compound score
-    # Note: syuzhet doesn't have a direct equivalent to VADER's compound score
-    # so we're using the basic sentiment score provided by syuzhet
     result[i] <- sentiment
   }
   
-  # Add the compound scores to the dataframe
   df$compound <- result
-  
-  # Remove the title column
   df$title <- NULL
   
-  # Group by date and calculate mean compound score
   df_summary <- df %>%
     group_by(date) %>%
     summarize(compound = mean(compound, na.rm = TRUE))
@@ -66,7 +54,6 @@ df$date <- as.Date(df$date)
 ```{r}
 df_result <- compound_scores(df)
 
-# View the result
 print(df_result)
 ```
 
@@ -152,7 +139,6 @@ X <- data[, !colnames(data) %in% c("Close", "Date")]
 n <- nrow(data)
 test_size <- 50
 
-# Create train and test sets
 X_train <- X[1:(n-test_size), ]
 y_train <- y[1:(n-test_size)]
 X_test <- X[(n-test_size+1):n, ]
@@ -184,6 +170,16 @@ model <- xgb.train(
 ```{r}
 y_pred <- predict(model, dtest)
 print(y_pred)
+```
+```{r}
+str(data)
+```
+```{r}
+mae <- mean(abs(y_test - y_pred))
+mape <- mean(abs((y_test - y_pred) / y_test)) * 100
+
+cat("MAE:", mae, "\n")
+cat("MAPE (%):", mape, "\n")
 ```
 
 ```{r}
@@ -230,14 +226,13 @@ xgb.plot.importance(importance, top_n = 10)
 
 ```{r}
 #Light BGM training - 
-#install.packages("lightgbm") # Skip this if already installed
+#install.packages("lightgbm") 
 library(lightgbm)
-library(Metrics)  # for rmse
+library(Metrics)  
 
 ```
 
 ```{r}
-# Assuming 'X' contains your features and 'y' is your target ('tomorrow')
 n <- nrow(data)
 test_size <- 50
 
@@ -273,64 +268,135 @@ print(y_pred)
 rmse_val <- rmse(y_test, y_pred)
 print(paste("LightGBM RMSE:", round(rmse_val, 4)))
 ```
-#Neural network
 ```{r}
-#install.packages("keras")
-library(keras)
+mae <- mean(abs(y_test - y_pred))
+mape <- mean(abs((y_test - y_pred) / y_test)) * 100
 
-```
-```{r}
-install_keras()
+cat("MAE:", mae, "\n")
+cat("MAPE (%):", mape, "\n")
 ```
 
 ```{r}
-# Normalize data
-X_scaled <- scale(as.matrix(X))
+install.packages("forecast")
+install.packages("tseries")
+install.packages("astsa")
+install.packages("TSA")
 
-n <- nrow(X_scaled)
+library(forecast)
+library(tseries)
+library(astsa)
+library(TSA)
+
+```
+
+#ARIMA
+```{r}
+close_ts <- ts(data$Close, frequency = 252)
+n <- length(close_ts)
 test_size <- 50
 
-X_train <- X_scaled[1:(n - test_size), ]
+train_ts <- close_ts[1:(n - test_size)]
+test_ts <- close_ts[(n - test_size + 1):n]
+
+arima_model <- auto.arima(train_ts)
+
+arima_forecast <- forecast(arima_model, h = test_size)
+
+plot(arima_forecast)
+
+print(arima_forecast$mean)
+
+arima_rmse <- sqrt(mean((arima_forecast$mean - test_ts)^2))
+cat("ARIMA RMSE:", arima_rmse, "\n")
+```
+```{r}
+diff_ts <- diff(train_ts)
+adf.test(diff_ts)
+
+```
+
+#SARIMAX
+```{r}
+X_matrix <- as.matrix(X)
+
+X_train <- X_matrix[1:(n - test_size), ]
+X_test <- X_matrix[(n - test_size + 1):n, ]
 y_train <- y[1:(n - test_size)]
-X_test <- X_scaled[(n - test_size + 1):n, ]
 y_test <- y[(n - test_size + 1):n]
 
-```
+sarimax_model <- auto.arima(y_train, xreg = X_train, seasonal = TRUE)
 
-```{r}
-install_tensorflow()
-```
+sarimax_forecast <- forecast(sarimax_model, xreg = X_test, h = test_size)
 
-```{r}
-model <- keras_model_sequential() %>%
-  layer_dense(units = 64, activation = "relu", input_shape = ncol(X_train)) %>%
-  layer_dense(units = 32, activation = "relu") %>%
-  layer_dense(units = 1)
+plot(sarimax_forecast, main = "SARIMAX Forecast")
 
-model %>% compile(
-  loss = "mse",
-  optimizer = optimizer_adam(),
-  metrics = list("mean_squared_error")
+y_pred <- as.numeric(sarimax_forecast$mean)
+
+sarimax_rmse <- sqrt(mean((y_pred - y_test)^2))
+sarimax_mae <- mean(abs(y_pred - y_test))
+sarimax_mape <- mean(abs((y_pred - y_test) / y_test)) * 100
+
+cat("SARIMAX Evaluation Metrics:\n")
+cat("RMSE :", sarimax_rmse, "\n")
+cat("MAE  :", sarimax_mae, "\n")
+cat("MAPE (%):", sarimax_mape, "\n")
+
+results_df <- data.frame(
+  Index = 1:test_size,
+  Actual = y_test,
+  Predicted = y_pred
 )
 
-history <- model %>% fit(
-  X_train, y_train,
-  epochs = 100,
-  batch_size = 16,
-  validation_split = 0.1,
-  verbose = 0
+ggplot(results_df, aes(x = Index)) +
+  geom_line(aes(y = Actual, color = "Actual"), size = 1.2) +
+  geom_line(aes(y = Predicted, color = "Predicted"), size = 1.2, linetype = "dashed") +
+  labs(title = "SARIMAX Forecast vs Actual Close Prices",
+       y = "Close Price", color = "Legend") +
+  scale_color_manual(values = c("Actual" = "blue", "Predicted" = "red")) +
+  theme_minimal()
+
+```
+
+```{r}
+install.packages("prophet")
+library(prophet)
+library(ggplot2)
+library(dplyr)
+```
+
+```{r}
+prophet_df <- data.frame(ds = data$Date, y = data$Close)
+
+test_size <- 50
+train_df <- prophet_df[1:(nrow(prophet_df) - test_size), ]
+test_df <- prophet_df[(nrow(prophet_df) - test_size + 1):nrow(prophet_df), ]
+
+m <- prophet(train_df)
+
+future <- make_future_dataframe(m, periods = test_size)
+forecast <- predict(m, future)
+
+plot(m, forecast)
+prophet_plot_components(m, forecast)
+
+predicted <- tail(forecast$yhat, test_size)
+actual <- test_df$y
+
+rmse <- sqrt(mean((predicted - actual)^2))
+cat("Prophet RMSE:", rmse, "\n")
+
+results_df <- data.frame(
+  Date = test_df$ds,
+  Actual = actual,
+  Predicted = predicted
 )
 
-```
-
-```{r}
-
-```
-
-```{r}
-
-```
-
-```{r}
-
+# Plot
+ggplot(results_df, aes(x = Date)) +
+  geom_line(aes(y = Actual, color = "Actual"), size = 1.1) +
+  geom_line(aes(y = Predicted, color = "Predicted"), size = 1.1, linetype = "dashed") +
+  labs(title = "Prophet Forecast vs Actual Close Prices",
+       y = "Close Price", color = "Legend") +
+  scale_color_manual(values = c("Actual" = "blue", "Predicted" = "red")) +
+  theme_minimal()
 ```
