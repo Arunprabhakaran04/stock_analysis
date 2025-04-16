@@ -2,3 +2,4 @@ individual_stock_5yr
 .Rhistory
 all_stock_5yr.csv
 merge.sh
+stock_project/.RData
